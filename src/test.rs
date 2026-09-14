@@ -422,3 +422,69 @@ fn test_events_emitted() {
     assert_eq!(r, Ok(()));
     assert_last_event(&s.env, "pin_changed");
 }
+
+/// fund, send and cash_out all guard `amount <= 0`. Zero and negative
+/// amounts must be rejected with InsufficientBalance — not because the
+/// wallet actually lacks funds, but because a "transfer" of nothing or
+/// negative value is not a real transfer, and the two failures share a
+/// variant since the gateway's response to a user is the same either way.
+#[test]
+fn test_zero_and_negative_amounts_rejected() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+    let pin = hash(&s.env, 2);
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin.clone());
+
+    let fund_with = |amount: i128| -> Result<(), Error> {
+        s.env.as_contract(&s.contract, || {
+            KoboDial::fund(s.env.clone(), s.admin.clone(), a.clone(), amount)
+        })
+    };
+    assert_eq!(fund_with(0), Err(Error::InsufficientBalance));
+    assert_eq!(fund_with(-1), Err(Error::InsufficientBalance));
+
+    // Give the wallet real funds so a zero/negative send or cash_out fails
+    // on the amount check itself, not on an incidental empty balance.
+    assert_eq!(fund_with(1000), Ok(()));
+
+    let send_with = |amount: i128| -> Result<(), Error> {
+        s.env.as_contract(&s.contract, || {
+            KoboDial::send(s.env.clone(), a.clone(), b.clone(), amount, pin.clone(), 0)
+        })
+    };
+    assert_eq!(send_with(0), Err(Error::InsufficientBalance));
+    assert_eq!(send_with(-500), Err(Error::InsufficientBalance));
+
+    let cash_out_with = |amount: i128| -> Result<(), Error> {
+        s.env.as_contract(&s.contract, || {
+            KoboDial::cash_out(
+                s.env.clone(),
+                s.admin.clone(),
+                a.clone(),
+                amount,
+                pin.clone(),
+                0,
+            )
+        })
+    };
+    assert_eq!(cash_out_with(0), Err(Error::InsufficientBalance));
+    assert_eq!(cash_out_with(-1), Err(Error::InsufficientBalance));
+
+    // None of the rejected calls should have moved balance or nonce.
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(1000)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(0)
+    );
+}
