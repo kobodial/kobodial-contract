@@ -1,5 +1,7 @@
 # KoboDial
 
+[![CI](https://github.com/kobodial/kobodial-contract/actions/workflows/ci.yml/badge.svg)](https://github.com/kobodial/kobodial-contract/actions/workflows/ci.yml)
+
 A phone-number-keyed smart wallet for Stellar/Soroban, operated over USSD
 from a feature phone. Named for the **kobo**, the smallest unit of the
 Nigerian Naira.
