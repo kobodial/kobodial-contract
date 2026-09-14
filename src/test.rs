@@ -349,6 +349,24 @@ fn test_unknown_wallet() {
     );
 }
 
+/// change_pin, send and cash_out against an unregistered wallet all fail
+/// with WalletNotFound rather than a panic — same as the read views.
+#[test]
+fn test_change_pin_unknown_wallet() {
+    let s = setup();
+    let unknown = hash(&s.env, 0xEE);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::change_pin(
+            s.env.clone(),
+            unknown.clone(),
+            hash(&s.env, 1),
+            hash(&s.env, 2),
+        )
+    });
+    assert_eq!(r, Err(Error::WalletNotFound));
+}
+
 /// Duplicate registration is refused — re-registering would reset the
 /// PIN and take over the balance.
 #[test]
