@@ -1,0 +1,21 @@
+[package]
+name = "kobodial"
+version = "0.1.0"
+edition = "2021"
+description = "Phone-number-keyed smart wallet for USSD operation — PIN-gated relay pattern"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "23"
+
+[dev-dependencies]
+soroban-sdk = { version = "23", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+panic = "abort"
+strip = true
