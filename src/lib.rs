@@ -67,11 +67,19 @@ impl KoboDial {
         // Re-registering an existing wallet would reset its PIN — a
         // takeover of the balance. Refuse explicitly so the gateway can
         // tell the user the number is already enrolled.
-        if env.storage().persistent().has(&wallet::StorageKey::Wallet(phone_hash.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&wallet::StorageKey::Wallet(phone_hash.clone()))
+        {
             return Err(Error::AlreadyRegistered);
         }
 
-        let w = Wallet { pin_hash, balance: 0, nonce: 0 };
+        let w = Wallet {
+            pin_hash,
+            balance: 0,
+            nonce: 0,
+        };
         wallet::put(&env, &phone_hash, &w);
         wallet::emit_registered(&env, &phone_hash);
         Ok(())
@@ -95,7 +103,10 @@ impl KoboDial {
         }
 
         let mut w = wallet::get(&env, &phone_hash)?;
-        w.balance = w.balance.checked_add(amount).ok_or(Error::InsufficientBalance)?;
+        w.balance = w
+            .balance
+            .checked_add(amount)
+            .ok_or(Error::InsufficientBalance)?;
         wallet::put(&env, &phone_hash, &w);
         wallet::emit_funded(&env, &phone_hash, amount, w.balance);
         Ok(())
