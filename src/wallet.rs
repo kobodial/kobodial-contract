@@ -7,15 +7,14 @@
 //! gateway. The contract can verify a hash it is given but can never learn
 //! the PIN itself.
 
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env};
+use soroban_sdk::{contractevent, contracttype, Address, BytesN, Env};
 
-/// The gateway admin's address, set once at deployment. The admin is the
-/// relayer service's own Soroban account — the only account that ever
-/// signs transactions against this contract. Users never hold keys; the
-/// PIN inside the payload is their authorization, and the admin's
-/// signature only attests that the payload is what the user approved over
-/// USSD, never that the admin approves the action itself.
-const ADMIN_KEY: &str = "Admin";
+// The gateway admin is the relayer service's own Soroban account — the
+// only account that ever signs transactions against this contract. Users
+// never hold keys; the PIN inside the payload is their authorization, and
+// the admin's signature only attests that the payload is what the user
+// approved over USSD, never that the admin approves the action itself.
+// Stored under StorageKey::Admin.
 
 /// One wallet, keyed by phone hash. Balances are tracked in stroops of the
 /// settlement token; the contract is the ledger of record for who owns
@@ -42,42 +41,59 @@ pub enum StorageKey {
 }
 
 // --- events ---------------------------------------------------------------
+//
+// Each event's fixed topic is its struct name in lower snake case, so the
+// published topics are wallet_registered, funded, sent, cashed_out and
+// pin_changed. phone_hash is marked #[topic] on every event: the USSD
+// gateway indexes a user's activity by phone hash, and a topic is the only
+// part of an event the network lets you filter on cheaply.
+//
+// Balances after the action travel in the data section so the gateway can
+// confirm a USSD step with the resulting balance without a follow-up read.
 
-#[contracttype]
-#[derive(Debug)]
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WalletRegistered {
+    #[topic]
     pub phone_hash: BytesN<32>,
 }
 
-#[contracttype]
-#[derive(Debug)]
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Funded {
+    #[topic]
     pub phone_hash: BytesN<32>,
     pub amount: i128,
     pub balance: i128,
 }
 
-#[contracttype]
-#[derive(Debug)]
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Sent {
+    /// Both sides are topics: a gateway showing one user's history needs to
+    /// find the transfers they received as well as the ones they sent.
+    #[topic]
     pub from_hash: BytesN<32>,
+    #[topic]
     pub to_hash: BytesN<32>,
     pub amount: i128,
     pub from_balance: i128,
     pub to_balance: i128,
 }
 
-#[contracttype]
-#[derive(Debug)]
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CashedOut {
+    #[topic]
     pub phone_hash: BytesN<32>,
     pub amount: i128,
     pub balance: i128,
 }
 
-#[contracttype]
-#[derive(Debug)]
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PinChanged {
+    #[topic]
     pub phone_hash: BytesN<32>,
 }
 
@@ -109,17 +125,19 @@ pub fn put(env: &Env, phone_hash: &BytesN<32>, wallet: &Wallet) {
 }
 
 pub fn emit_registered(env: &Env, phone_hash: &BytesN<32>) {
-    env.events().publish(
-        (symbol_short!("reged"),),
-        WalletRegistered { phone_hash: phone_hash.clone() },
-    );
+    WalletRegistered {
+        phone_hash: phone_hash.clone(),
+    }
+    .publish(env);
 }
 
 pub fn emit_funded(env: &Env, phone_hash: &BytesN<32>, amount: i128, balance: i128) {
-    env.events().publish(
-        (symbol_short!("funded"),),
-        Funded { phone_hash: phone_hash.clone(), amount, balance },
-    );
+    Funded {
+        phone_hash: phone_hash.clone(),
+        amount,
+        balance,
+    }
+    .publish(env);
 }
 
 pub fn emit_sent(
@@ -130,22 +148,28 @@ pub fn emit_sent(
     from_balance: i128,
     to_balance: i128,
 ) {
-    env.events().publish(
-        (symbol_short!("sent"),),
-        Sent { from_hash: from_hash.clone(), to_hash: to_hash.clone(), amount, from_balance, to_balance },
-    );
+    Sent {
+        from_hash: from_hash.clone(),
+        to_hash: to_hash.clone(),
+        amount,
+        from_balance,
+        to_balance,
+    }
+    .publish(env);
 }
 
 pub fn emit_cashed_out(env: &Env, phone_hash: &BytesN<32>, amount: i128, balance: i128) {
-    env.events().publish(
-        (symbol_short!("cout"),),
-        CashedOut { phone_hash: phone_hash.clone(), amount, balance },
-    );
+    CashedOut {
+        phone_hash: phone_hash.clone(),
+        amount,
+        balance,
+    }
+    .publish(env);
 }
 
 pub fn emit_pin_changed(env: &Env, phone_hash: &BytesN<32>) {
-    env.events().publish(
-        (symbol_short!("pinch"),),
-        PinChanged { phone_hash: phone_hash.clone() },
-    );
+    PinChanged {
+        phone_hash: phone_hash.clone(),
+    }
+    .publish(env);
 }
