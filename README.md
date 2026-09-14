@@ -109,6 +109,25 @@ cargo build --target wasm32v1-none --release # the deployable artifact
 
 ## Testnet deployment
 
+**Contract ID:** `CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU`
+
+[View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU)
+ · [Lab](https://lab.stellar.org/r/testnet/contract/CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU)
+
+The deployment was exercised end to end on testnet — registration,
+cash-in, a PIN-authorized cash-out, and both failure modes:
+
+| Call | Result |
+| --- | --- |
+| `register` | `wallet_registered` event, balance `0` |
+| `fund 5000` | `funded` event, balance `5000` |
+| `cash_out 1000, nonce 0` | `cashed_out` event, balance `4000`, nonce → `1` |
+| `cash_out 1000, nonce 0` again | `Error(Contract, #3)` — `InvalidNonce`, the replay guard |
+| `cash_out` with a wrong PIN, nonce `1` | `Error(Contract, #2)` — `InvalidPin` |
+| balance afterwards | `4000`, unchanged by either failure |
+
+### Deploying your own
+
 ```sh
 # One-time: an identity to deploy with, funded by friendbot
 stellar keys generate --global deployer --network testnet --fund
