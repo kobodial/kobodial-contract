@@ -27,4 +27,8 @@ pub enum Error {
     /// The caller is not the gateway admin. Only the admin may register
     /// wallets, take cash-in, and execute cash-outs.
     Unauthorized = 5,
+    /// A wallet already exists for this phone hash. Registration would
+    /// otherwise reset the PIN and take over the balance, so it is
+    /// refused rather than silently ignored.
+    AlreadyRegistered = 6,
 }
