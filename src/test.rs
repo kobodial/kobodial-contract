@@ -1,0 +1,424 @@
+//! Unit tests over the Soroban test environment, one per USSD scenario
+//! the gateway will actually hit. phone/pin hashes are arbitrary fixed
+//! 32-byte values — the gateway hashes off-chain; the contract only ever
+//! sees hashes.
+
+#![cfg(test)]
+extern crate std;
+
+use crate::{error::Error, KoboDial};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events as _, Address, BytesN, Env, Symbol, TryFromVal,
+};
+
+/// A fixed 32-byte "hash" for tests, distinct per seed byte. Built against
+/// the env under test — a BytesN is bound to the environment that made it.
+fn hash(env: &Env, seed: u8) -> BytesN<32> {
+    let mut b = [0u8; 32];
+    b[0] = seed;
+    BytesN::from_array(env, &b)
+}
+
+struct Setup {
+    env: Env,
+    contract: Address,
+    admin: Address,
+}
+
+fn setup() -> Setup {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract = env.register(KoboDial, (&admin,));
+    Setup {
+        env,
+        contract,
+        admin,
+    }
+}
+
+fn register(env: &Env, c: &Address, admin: &Address, phone: BytesN<32>, pin: BytesN<32>) {
+    let r: Result<(), Error> = env.as_contract(c, || {
+        KoboDial::register(env.clone(), admin.clone(), phone, pin)
+    });
+    assert_eq!(r, Ok(()));
+}
+
+fn fund(env: &Env, c: &Address, admin: &Address, phone: BytesN<32>, amount: i128) {
+    let r: Result<(), Error> = env.as_contract(c, || {
+        KoboDial::fund(env.clone(), admin.clone(), phone, amount)
+    });
+    assert_eq!(r, Ok(()));
+}
+
+/// 1. Register + fund works.
+#[test]
+fn test_register_and_fund() {
+    let s = setup();
+    let (phone, pin) = (hash(&s.env, 1), hash(&s.env, 2));
+
+    register(&s.env, &s.contract, &s.admin, phone.clone(), pin.clone());
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            phone.clone()
+        )),
+        Ok(0)
+    );
+
+    fund(&s.env, &s.contract, &s.admin, phone.clone(), 500);
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            phone.clone()
+        )),
+        Ok(500)
+    );
+}
+
+/// 2. Send with the correct PIN and exact current nonce succeeds; both
+///    balances update and the sender's nonce increments.
+#[test]
+fn test_send_correct_pin_and_nonce() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+    let pin = hash(&s.env, 2);
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin.clone());
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), 0)
+    });
+    assert_eq!(r, Ok(()));
+
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(600)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            b.clone()
+        )),
+        Ok(400)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(1)
+    );
+    // The receiver's nonce is untouched: receiving requires no authorization.
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            b.clone()
+        )),
+        Ok(0)
+    );
+}
+
+/// 3. Wrong PIN fails with InvalidPin and nothing changes.
+#[test]
+fn test_send_wrong_pin() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), hash(&s.env, 2));
+    register(&s.env, &s.contract, &s.admin, b.clone(), hash(&s.env, 2));
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, hash(&s.env, 9), 0)
+    });
+    assert_eq!(r, Err(Error::InvalidPin));
+
+    // State unchanged: balance, and the nonce — a failed attempt must not
+    // consume the user's confirmation.
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(1000)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(0)
+    );
+}
+
+/// 4. Replaying the same nonce twice: the second execution fails with
+///    InvalidNonce. The replay guard is the heart of the relay pattern.
+#[test]
+fn test_send_nonce_replay_rejected() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+    let pin = hash(&s.env, 2);
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin.clone());
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    let send = |nonce: u32| -> Result<(), Error> {
+        s.env.as_contract(&s.contract, || {
+            KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), nonce)
+        })
+    };
+
+    assert_eq!(send(0), Ok(()));
+    // Same authorization replayed: the wallet's nonce is now 1, so nonce 0
+    // is a stale confirmation and must fail.
+    assert_eq!(send(0), Err(Error::InvalidNonce));
+    // A stale future nonce (skipping ahead) is also rejected — exact
+    // match only, so the relayer cannot front-run the user.
+    assert_eq!(send(5), Err(Error::InvalidNonce));
+
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(600)
+    );
+}
+
+/// 5. Insufficient balance fails cleanly with the typed error.
+#[test]
+fn test_send_insufficient_balance() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+    let pin = hash(&s.env, 2);
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin.clone());
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 100);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), 0)
+    });
+    assert_eq!(r, Err(Error::InsufficientBalance));
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(100)
+    );
+}
+
+/// 6. change_pin requires the old PIN; the new PIN then works for
+///    subsequent sends and the old one stops working.
+#[test]
+fn test_change_pin() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+    let (old_pin, new_pin) = (hash(&s.env, 2), hash(&s.env, 7));
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), old_pin.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), old_pin.clone());
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    // Wrong old PIN refused.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::change_pin(s.env.clone(), a.clone(), hash(&s.env, 9), new_pin.clone())
+    });
+    assert_eq!(r, Err(Error::InvalidPin));
+
+    // Correct old PIN accepted.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::change_pin(s.env.clone(), a.clone(), old_pin.clone(), new_pin.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    // The new PIN authorizes; the old PIN no longer does.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 100, new_pin.clone(), 0)
+    });
+    assert_eq!(r, Ok(()));
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 100, old_pin.clone(), 1)
+    });
+    assert_eq!(r, Err(Error::InvalidPin));
+}
+
+/// cash_out mirrors send's authorization: PIN + exact nonce, admin-only.
+#[test]
+fn test_cash_out() {
+    let s = setup();
+    let a = hash(&s.env, 1);
+    let pin = hash(&s.env, 2);
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin.clone());
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cash_out(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            700,
+            pin.clone(),
+            0,
+        )
+    });
+    assert_eq!(r, Ok(()));
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(300)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(1)
+    );
+
+    // Replay of the same cash-out confirmation fails.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cash_out(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            700,
+            pin.clone(),
+            0,
+        )
+    });
+    assert_eq!(r, Err(Error::InvalidNonce));
+}
+
+/// Non-admin callers cannot register, fund, or cash out.
+#[test]
+fn test_admin_only_functions() {
+    let s = setup();
+    let a = hash(&s.env, 1);
+    let impostor = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::register(s.env.clone(), impostor.clone(), a.clone(), hash(&s.env, 2))
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+
+    // Even with the impostor blocked at the identity check, the admin
+    // check happens before any require_auth, so no auth is consumed.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cash_out(
+            s.env.clone(),
+            impostor.clone(),
+            a.clone(),
+            1,
+            hash(&s.env, 2),
+            0,
+        )
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+}
+
+/// Unknown wallet reads fail with WalletNotFound, not a panic.
+#[test]
+fn test_unknown_wallet() {
+    let s = setup();
+    let unknown = hash(&s.env, 0xEE);
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            unknown.clone()
+        )),
+        Err(Error::WalletNotFound)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            unknown.clone()
+        )),
+        Err(Error::WalletNotFound)
+    );
+}
+
+/// Duplicate registration is refused — re-registering would reset the
+/// PIN and take over the balance.
+#[test]
+fn test_duplicate_registration_refused() {
+    let s = setup();
+    let a = hash(&s.env, 1);
+    register(&s.env, &s.contract, &s.admin, a.clone(), hash(&s.env, 2));
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::register(s.env.clone(), s.admin.clone(), a.clone(), hash(&s.env, 3))
+    });
+    assert_eq!(r, Err(Error::AlreadyRegistered));
+}
+
+/// Asserts the event published by the call that just ran carries the
+/// expected topic symbol. The test environment's event buffer reflects the
+/// most recent invocation context rather than a cumulative log, so each
+/// action is checked immediately after it runs — which also pins the
+/// payload rather than merely counting that something fired.
+fn assert_last_event(env: &Env, want: &str) {
+    let events = env.events().all();
+    assert_eq!(
+        events.len(),
+        1,
+        "the last call should publish exactly one event"
+    );
+    let (_, topics, _) = events.last().unwrap();
+    // topics[0] is the event's fixed name; the indexed phone hashes follow.
+    let got = Symbol::try_from_val(env, &topics.first().unwrap()).unwrap();
+    assert_eq!(got, Symbol::new(env, want));
+}
+
+/// Every state-changing entry point publishes its event.
+#[test]
+fn test_events_emitted() {
+    let s = setup();
+    let (a, b) = (hash(&s.env, 1), hash(&s.env, 3));
+    let pin = hash(&s.env, 2);
+
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin.clone());
+    assert_last_event(&s.env, "wallet_registered");
+
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin.clone());
+    assert_last_event(&s.env, "wallet_registered");
+
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+    assert_last_event(&s.env, "funded");
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), 0)
+    });
+    assert_eq!(r, Ok(()));
+    assert_last_event(&s.env, "sent");
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cash_out(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            100,
+            pin.clone(),
+            1,
+        )
+    });
+    assert_eq!(r, Ok(()));
+    assert_last_event(&s.env, "cashed_out");
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::change_pin(s.env.clone(), a.clone(), pin.clone(), hash(&s.env, 7))
+    });
+    assert_eq!(r, Ok(()));
+    assert_last_event(&s.env, "pin_changed");
+}
