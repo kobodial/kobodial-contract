@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Critical:** `send` and `change_pin` were authorized solely by
+  `pin_hash` (plus a nonce on `send`). Both values live in contract
+  storage, which Soroban makes publicly readable — so the value
+  authorizing a transfer was published next to the balance it
+  protected, and any reader could drain a wallet without knowing the
+  PIN. Both now require `admin.require_auth()`, as `register`, `fund`
+  and `cash_out` already did. See #10 and #11.
+
+### Changed
+
+- **Breaking:** `send` and `change_pin` take the admin address as their
+  first argument, matching `fund` and `cash_out`. Clients must pass it.
+- Redeployed to Stellar testnet as
+  `CDQKYOYWBUAFZUZIAX4YDTLWYTYWPAV3AOSCUJJ2PWNRCECVV5F6XX73`. Wallets on the
+  previous deployment do not carry over.
+
 ## [0.1.0] — MVP
 
 Initial release: the phone-number-keyed wallet and the PIN-gated relay
@@ -24,7 +44,8 @@ pattern.
 - CI running fmt, clippy, the test suite, and a wasm build on every
   push and pull request.
 - Deployed to Stellar testnet:
-  `CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU`.
+  `CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU`
+  (superseded — see Unreleased).
 
 ### Deliberately not included
 
