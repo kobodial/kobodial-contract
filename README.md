@@ -111,10 +111,17 @@ cargo build --target wasm32v1-none --release # the deployable artifact
 
 ## Testnet deployment
 
-**Contract ID:** `CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU`
+**Contract ID:** `CDQKYOYWBUAFZUZIAX4YDTLWYTYWPAV3AOSCUJJ2PWNRCECVV5F6XX73`
 
-[View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU)
- · [Lab](https://lab.stellar.org/r/testnet/contract/CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU)
+[View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CDQKYOYWBUAFZUZIAX4YDTLWYTYWPAV3AOSCUJJ2PWNRCECVV5F6XX73)
+ · [Lab](https://lab.stellar.org/r/testnet/contract/CDQKYOYWBUAFZUZIAX4YDTLWYTYWPAV3AOSCUJJ2PWNRCECVV5F6XX73)
+
+Redeployed on 2026-09-15 to carry the authorization fix in #11. The
+previous deployment (`CCPXFBZNI2HR6TPCA5QIYLQRU5W4IXCEK5Y6ANTXKCRLXCXNRILIQQJU`)
+is left in place but must not be used: `send` and `change_pin` on it are
+authorized by a value anyone can read out of public contract storage
+(#10). Soroban gives a redeployed contract a new ID, so wallets on the
+old contract do not carry over and re-register on the new one.
 
 The deployment was exercised end to end on testnet — registration,
 cash-in, a PIN-authorized cash-out, and both failure modes:
