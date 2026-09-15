@@ -112,17 +112,32 @@ impl KoboDial {
         Ok(())
     }
 
-    /// PIN-authorized transfer between two wallets. The relayer submits;
-    /// the PIN and the exact current nonce authorize. On success the
-    /// sender's nonce increments, so this approval can never be reused.
+    /// PIN-authorized transfer between two wallets. The relayer submits
+    /// and must sign; the PIN and the exact current nonce authorize the
+    /// user's side. On success the sender's nonce increments, so this
+    /// approval can never be reused.
+    ///
+    /// The admin signature is not ceremony. `pin_hash` and `nonce` both
+    /// live in this contract's storage, and Soroban contract storage is
+    /// public — so on its own `pin_hash` is a bearer token published
+    /// next to the balance it protects, and anyone could read it and
+    /// drain the wallet. The admin's signature is what makes the pair
+    /// meaningful: it attests the payload is what the user approved over
+    /// USSD.
     pub fn send(
         env: Env,
+        admin: Address,
         from_hash: BytesN<32>,
         to_hash: BytesN<32>,
         amount: i128,
         pin_hash: BytesN<32>,
         nonce: u32,
     ) -> Result<(), Error> {
+        if admin != wallet::admin(&env) {
+            return Err(Error::Unauthorized);
+        }
+        admin.require_auth();
+
         if amount <= 0 {
             return Err(Error::InsufficientBalance);
         }
@@ -145,15 +160,26 @@ impl KoboDial {
         Ok(())
     }
 
-    /// PIN change. The old PIN hash must match; no nonce needed because
-    /// changing a PIN moves no funds and the old PIN is itself the
-    /// user's current authorization.
+    /// PIN change. The relayer must sign, and the old PIN hash must
+    /// match. No nonce: changing a PIN moves no funds, so there is no
+    /// transfer to replay.
+    ///
+    /// Admin auth matters more here than on `send`, not less. The stored
+    /// `old_pin_hash` is readable from public contract storage, so
+    /// without a signature anyone could present it and set a PIN of
+    /// their own — a permanent takeover rather than a single transfer.
     pub fn change_pin(
         env: Env,
+        admin: Address,
         phone_hash: BytesN<32>,
         old_pin_hash: BytesN<32>,
         new_pin_hash: BytesN<32>,
     ) -> Result<(), Error> {
+        if admin != wallet::admin(&env) {
+            return Err(Error::Unauthorized);
+        }
+        admin.require_auth();
+
         let mut w = wallet::get(&env, &phone_hash)?;
         if w.pin_hash != old_pin_hash {
             return Err(Error::InvalidPin);
