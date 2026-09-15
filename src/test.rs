@@ -89,7 +89,15 @@ fn test_send_correct_pin_and_nonce() {
     fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
 
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), 0)
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            400,
+            pin.clone(),
+            0,
+        )
     });
     assert_eq!(r, Ok(()));
 
@@ -135,7 +143,15 @@ fn test_send_wrong_pin() {
     fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
 
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, hash(&s.env, 9), 0)
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            400,
+            hash(&s.env, 9),
+            0,
+        )
     });
     assert_eq!(r, Err(Error::InvalidPin));
 
@@ -171,7 +187,15 @@ fn test_send_nonce_replay_rejected() {
 
     let send = |nonce: u32| -> Result<(), Error> {
         s.env.as_contract(&s.contract, || {
-            KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), nonce)
+            KoboDial::send(
+                s.env.clone(),
+                s.admin.clone(),
+                a.clone(),
+                b.clone(),
+                400,
+                pin.clone(),
+                nonce,
+            )
         })
     };
 
@@ -204,7 +228,15 @@ fn test_send_insufficient_balance() {
     fund(&s.env, &s.contract, &s.admin, a.clone(), 100);
 
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), 0)
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            400,
+            pin.clone(),
+            0,
+        )
     });
     assert_eq!(r, Err(Error::InsufficientBalance));
     assert_eq!(
@@ -230,23 +262,51 @@ fn test_change_pin() {
 
     // Wrong old PIN refused.
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::change_pin(s.env.clone(), a.clone(), hash(&s.env, 9), new_pin.clone())
+        KoboDial::change_pin(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            hash(&s.env, 9),
+            new_pin.clone(),
+        )
     });
     assert_eq!(r, Err(Error::InvalidPin));
 
     // Correct old PIN accepted.
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::change_pin(s.env.clone(), a.clone(), old_pin.clone(), new_pin.clone())
+        KoboDial::change_pin(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            old_pin.clone(),
+            new_pin.clone(),
+        )
     });
     assert_eq!(r, Ok(()));
 
     // The new PIN authorizes; the old PIN no longer does.
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 100, new_pin.clone(), 0)
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            100,
+            new_pin.clone(),
+            0,
+        )
     });
     assert_eq!(r, Ok(()));
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 100, old_pin.clone(), 1)
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            100,
+            old_pin.clone(),
+            1,
+        )
     });
     assert_eq!(r, Err(Error::InvalidPin));
 }
@@ -359,6 +419,7 @@ fn test_change_pin_unknown_wallet() {
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
         KoboDial::change_pin(
             s.env.clone(),
+            s.admin.clone(),
             unknown.clone(),
             hash(&s.env, 1),
             hash(&s.env, 2),
@@ -416,7 +477,15 @@ fn test_events_emitted() {
     assert_last_event(&s.env, "funded");
 
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::send(s.env.clone(), a.clone(), b.clone(), 400, pin.clone(), 0)
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            400,
+            pin.clone(),
+            0,
+        )
     });
     assert_eq!(r, Ok(()));
     assert_last_event(&s.env, "sent");
@@ -435,7 +504,13 @@ fn test_events_emitted() {
     assert_last_event(&s.env, "cashed_out");
 
     let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
-        KoboDial::change_pin(s.env.clone(), a.clone(), pin.clone(), hash(&s.env, 7))
+        KoboDial::change_pin(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            pin.clone(),
+            hash(&s.env, 7),
+        )
     });
     assert_eq!(r, Ok(()));
     assert_last_event(&s.env, "pin_changed");
@@ -469,7 +544,15 @@ fn test_zero_and_negative_amounts_rejected() {
 
     let send_with = |amount: i128| -> Result<(), Error> {
         s.env.as_contract(&s.contract, || {
-            KoboDial::send(s.env.clone(), a.clone(), b.clone(), amount, pin.clone(), 0)
+            KoboDial::send(
+                s.env.clone(),
+                s.admin.clone(),
+                a.clone(),
+                b.clone(),
+                amount,
+                pin.clone(),
+                0,
+            )
         })
     };
     assert_eq!(send_with(0), Err(Error::InsufficientBalance));
@@ -505,4 +588,123 @@ fn test_zero_and_negative_amounts_rejected() {
         )),
         Ok(0)
     );
+}
+
+// --- authorization on the PIN-authorized paths --------------------------
+//
+// pin_hash and nonce both live in this contract's storage, and Soroban
+// contract storage is public. Read together they are everything `send`
+// used to require, which made pin_hash a bearer token published next to
+// the balance it protects. These tests pin the admin gate that closes
+// that: they are the regression to keep, not the happy paths above.
+
+/// 14. send refuses a caller that is not the registered admin.
+#[test]
+fn test_send_rejects_non_admin() {
+    let s = setup();
+    let (a, pin_a) = (hash(&s.env, 1), hash(&s.env, 2));
+    let (b, pin_b) = (hash(&s.env, 3), hash(&s.env, 4));
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin_a.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin_b);
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    // Everything an attacker can read from public chain state: the
+    // victim's phone hash, their pin_hash, and their current nonce.
+    let impostor = Address::generate(&s.env);
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(
+            s.env.clone(),
+            impostor.clone(),
+            a.clone(),
+            b.clone(),
+            1000,
+            pin_a.clone(),
+            0,
+        )
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+
+    // The drain must not have happened.
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_balance(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(1000)
+    );
+    assert_eq!(
+        s.env.as_contract(&s.contract, || KoboDial::get_nonce(
+            s.env.clone(),
+            a.clone()
+        )),
+        Ok(0)
+    );
+}
+
+/// 15. change_pin refuses a caller that is not the registered admin.
+#[test]
+fn test_change_pin_rejects_non_admin() {
+    let s = setup();
+    let (phone, pin) = (hash(&s.env, 1), hash(&s.env, 2));
+    register(&s.env, &s.contract, &s.admin, phone.clone(), pin.clone());
+
+    let impostor = Address::generate(&s.env);
+    let attacker_pin = hash(&s.env, 99);
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::change_pin(
+            s.env.clone(),
+            impostor.clone(),
+            phone.clone(),
+            pin.clone(),
+            attacker_pin.clone(),
+        )
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+
+    // The takeover must not have happened: the original PIN still works
+    // and the attacker's does not.
+    let change = |old: BytesN<32>, new: BytesN<32>| -> Result<(), Error> {
+        s.env.as_contract(&s.contract, || {
+            KoboDial::change_pin(s.env.clone(), s.admin.clone(), phone.clone(), old, new)
+        })
+    };
+    assert_eq!(
+        change(attacker_pin, hash(&s.env, 7)),
+        Err(Error::InvalidPin)
+    );
+    assert_eq!(change(pin, hash(&s.env, 7)), Ok(()));
+}
+
+/// 16. send requires the admin's signature, not merely its address.
+///
+/// The identity check above passes if an attacker simply names the real
+/// admin. require_auth is what makes that useless without the key, so
+/// this runs without mocked auths and expects the call to fail.
+#[test]
+// Pinned to the auth failure specifically: a bare should_panic would also
+// pass if this test broke for some unrelated reason, which is exactly how
+// a security regression test quietly stops testing anything.
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn test_send_requires_admin_signature() {
+    let s = setup();
+    let (a, pin_a) = (hash(&s.env, 1), hash(&s.env, 2));
+    let (b, pin_b) = (hash(&s.env, 3), hash(&s.env, 4));
+    register(&s.env, &s.contract, &s.admin, a.clone(), pin_a.clone());
+    register(&s.env, &s.contract, &s.admin, b.clone(), pin_b);
+    fund(&s.env, &s.contract, &s.admin, a.clone(), 1000);
+
+    // Withdraw the blanket authorization the harness sets up, leaving the
+    // correct admin address but no signature behind it.
+    s.env.set_auths(&[]);
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::send(
+            s.env.clone(),
+            s.admin.clone(),
+            a.clone(),
+            b.clone(),
+            1000,
+            pin_a.clone(),
+            0,
+        )
+    });
 }
