@@ -708,3 +708,306 @@ fn test_send_requires_admin_signature() {
         )
     });
 }
+
+// --- admin rotation -------------------------------------------------------
+//
+// The admin key authorizes every state change here. Without rotation, a
+// leaked key means an attacker can act for every wallet, and a lost key
+// means nothing can ever be registered or moved again — in both cases the
+// only remedy is redeploying and re-registering every wallet, which for
+// real balances is not a remedy at all.
+//
+// Note on auth: setup() calls mock_all_auths(), so these tests exercise the
+// contract's own identity checks, not signature verification. The
+// require_auth calls are asserted separately by the suite's auth tests.
+
+/// Proposing does not transfer anything on its own.
+#[test]
+fn propose_admin_does_not_change_the_admin_yet() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    let current = s
+        .env
+        .as_contract(&s.contract, || KoboDial::admin(s.env.clone()));
+    assert_eq!(current, s.admin, "admin must not change before acceptance");
+
+    let pending = s
+        .env
+        .as_contract(&s.contract, || KoboDial::pending_admin(s.env.clone()));
+    assert_eq!(pending, Some(successor));
+}
+
+/// The full handover, and the old key losing privilege at the end of it.
+#[test]
+fn accepting_a_proposal_transfers_admin() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), successor.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    let current = s
+        .env
+        .as_contract(&s.contract, || KoboDial::admin(s.env.clone()));
+    assert_eq!(current, successor);
+
+    // The pending slot is cleared, so the same proposal cannot be replayed.
+    let pending = s
+        .env
+        .as_contract(&s.contract, || KoboDial::pending_admin(s.env.clone()));
+    assert_eq!(pending, None);
+
+    // The new admin can do admin things.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::register(
+            s.env.clone(),
+            successor.clone(),
+            hash(&s.env, 1),
+            hash(&s.env, 2),
+        )
+    });
+    assert_eq!(r, Ok(()));
+
+    // And the outgoing one cannot.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::register(
+            s.env.clone(),
+            s.admin.clone(),
+            hash(&s.env, 3),
+            hash(&s.env, 4),
+        )
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+}
+
+/// Only the current admin may nominate.
+#[test]
+fn a_non_admin_cannot_propose_a_successor() {
+    let s = setup();
+    let impostor = Address::generate(&s.env);
+    let target = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), impostor.clone(), target.clone())
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+
+    let pending = s
+        .env
+        .as_contract(&s.contract, || KoboDial::pending_admin(s.env.clone()));
+    assert_eq!(pending, None);
+}
+
+/// Acceptance requires a proposal to exist.
+#[test]
+fn accepting_without_a_proposal_fails() {
+    let s = setup();
+    let hopeful = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), hopeful.clone())
+    });
+    assert_eq!(r, Err(Error::NoPendingAdminTransfer));
+}
+
+/// Only the nominated address may accept — otherwise a proposal would be an
+/// open invitation for anyone watching the ledger to take the contract.
+#[test]
+fn only_the_nominated_address_can_accept() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+    let opportunist = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), opportunist.clone())
+    });
+    assert_eq!(r, Err(Error::NotProposedAdmin));
+
+    let current = s
+        .env
+        .as_contract(&s.contract, || KoboDial::admin(s.env.clone()));
+    assert_eq!(current, s.admin);
+}
+
+/// A mistyped nomination is correctable right up until it is accepted.
+#[test]
+fn proposing_again_replaces_the_earlier_proposal() {
+    let s = setup();
+    let mistyped = Address::generate(&s.env);
+    let intended = Address::generate(&s.env);
+
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), mistyped.clone())
+    });
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), intended.clone())
+    });
+
+    // The superseded address must not be able to take the contract.
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), mistyped.clone())
+    });
+    assert_eq!(r, Err(Error::NotProposedAdmin));
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), intended.clone())
+    });
+    assert_eq!(r, Ok(()));
+}
+
+/// Cancelling withdraws the nomination.
+#[test]
+fn cancelling_a_transfer_prevents_acceptance() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cancel_admin_transfer(s.env.clone(), s.admin.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), successor.clone())
+    });
+    assert_eq!(r, Err(Error::NoPendingAdminTransfer));
+
+    let current = s
+        .env
+        .as_contract(&s.contract, || KoboDial::admin(s.env.clone()));
+    assert_eq!(current, s.admin);
+}
+
+/// Cancellation is admin-only, and needs something to cancel.
+#[test]
+fn cancel_is_rejected_for_a_non_admin_or_when_nothing_is_pending() {
+    let s = setup();
+    let impostor = Address::generate(&s.env);
+    let successor = Address::generate(&s.env);
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cancel_admin_transfer(s.env.clone(), s.admin.clone())
+    });
+    assert_eq!(r, Err(Error::NoPendingAdminTransfer));
+
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::cancel_admin_transfer(s.env.clone(), impostor.clone())
+    });
+    assert_eq!(r, Err(Error::Unauthorized));
+
+    // The nomination survives a rejected cancellation.
+    let pending = s
+        .env
+        .as_contract(&s.contract, || KoboDial::pending_admin(s.env.clone()));
+    assert_eq!(pending, Some(successor));
+}
+
+/// A completed handover cannot be replayed to take the contract back.
+#[test]
+fn an_accepted_proposal_cannot_be_accepted_twice() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), successor.clone())
+    });
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), successor.clone())
+    });
+    assert_eq!(r, Err(Error::NoPendingAdminTransfer));
+}
+
+/// Rotation can happen more than once, so a key can be moved on again.
+#[test]
+fn admin_can_be_rotated_repeatedly() {
+    let s = setup();
+    let second = Address::generate(&s.env);
+    let third = Address::generate(&s.env);
+
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), second.clone())
+    });
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), second.clone())
+    });
+
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), second.clone(), third.clone())
+    });
+    assert_eq!(r, Ok(()));
+    let r: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), third.clone())
+    });
+    assert_eq!(r, Ok(()));
+
+    let current = s
+        .env
+        .as_contract(&s.contract, || KoboDial::admin(s.env.clone()));
+    assert_eq!(current, third);
+}
+
+/// Acceptance requires the successor's signature, not merely its address.
+///
+/// This is the property the two-step handover exists for: naming an address
+/// proves nothing, and the transfer must not complete unless the incoming
+/// key can actually sign. Without it, the second step is decoration and a
+/// handover to an uncontrolled address would still succeed.
+#[test]
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn accepting_requires_the_successors_signature() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+
+    // Withdraw the harness's blanket authorization, leaving the correct
+    // nominated address but no signature behind it.
+    s.env.set_auths(&[]);
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::accept_admin(s.env.clone(), successor.clone())
+    });
+}
+
+/// Proposing requires the outgoing admin's signature too.
+#[test]
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn proposing_requires_the_current_admins_signature() {
+    let s = setup();
+    let successor = Address::generate(&s.env);
+
+    s.env.set_auths(&[]);
+    let _: Result<(), Error> = s.env.as_contract(&s.contract, || {
+        KoboDial::propose_admin(s.env.clone(), s.admin.clone(), successor.clone())
+    });
+}
