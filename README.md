@@ -86,17 +86,44 @@ cannot run it twice; nor can anyone who captured it in flight.
 | `change_pin(phone_hash, old_pin_hash, new_pin_hash)` | relayer | **old PIN** | Change the PIN |
 | `get_balance(phone_hash)` | — | — | Read a balance |
 | `get_nonce(phone_hash)` | — | — | Read the next nonce a call must carry |
+| `propose_admin(admin, new_admin)` | admin | admin identity | Nominate a successor admin |
+| `accept_admin(new_admin)` | **successor** | nomination + successor identity | Complete a handover |
+| `cancel_admin_transfer(admin)` | admin | admin identity | Withdraw a pending nomination |
+| `admin()` / `pending_admin()` | — | — | Read the current admin, and any nomination in flight |
 
 Errors are typed, never panics: `WalletNotFound`, `InvalidPin`,
 `InvalidNonce`, `InsufficientBalance`, `Unauthorized`,
-`AlreadyRegistered`. The gateway maps each to a USSD message — it has
+`AlreadyRegistered`, `NoPendingAdminTransfer`, `NotProposedAdmin`. The gateway maps each to a USSD message — it has
 160 characters and a few seconds, and can do nothing useful with a WASM
 trap.
 
 Events — `wallet_registered`, `funded`, `sent`, `cashed_out`,
 `pin_changed` — carry the phone hash as an indexed topic and the
 resulting balance in the data, so the gateway can confirm a step without
-a follow-up read.
+a follow-up read. Admin changes emit `admin_transfer_proposed`,
+`admin_changed` and `admin_transfer_cancelled`, keyed on the addresses
+involved.
+
+### Rotating the admin
+
+The admin key authorizes every state change in this contract. Leaked, it
+lets its holder act for every wallet; lost, it means nothing can ever be
+registered or moved again. Rotation is therefore a two-step handover:
+
+```sh
+stellar contract invoke ... -- propose_admin --admin <current> --new_admin <next>
+stellar contract invoke ... -- accept_admin  --new_admin <next>     # signed by <next>
+```
+
+Nothing changes until the nominee accepts, and acceptance is signed by
+the nominee itself. One call would be simpler and much worse: a transfer
+to a mistyped or uncontrolled address would hand the contract to nobody,
+permanently, with every balance stranded — the same failure rotation
+exists to provide a way out of. Requiring the incoming key to sign proves
+it is held before the outgoing one stops working.
+
+A nomination can be replaced by proposing again, or withdrawn with
+`cancel_admin_transfer`, at any point before it is accepted.
 
 ## Building and testing
 

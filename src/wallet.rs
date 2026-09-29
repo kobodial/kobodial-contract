@@ -38,6 +38,9 @@ pub enum StorageKey {
     /// phone_hash -> Wallet
     Wallet(BytesN<32>),
     Admin,
+    /// The address proposed as the next admin, awaiting its own acceptance.
+    /// Absent unless a transfer is in flight.
+    PendingAdmin,
 }
 
 // --- events ---------------------------------------------------------------
@@ -97,6 +100,33 @@ pub struct PinChanged {
     pub phone_hash: BytesN<32>,
 }
 
+/// Emitted when the current admin nominates a successor. The transfer has
+/// not happened yet: the nominee must accept before anything changes.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferProposed {
+    #[topic]
+    pub current: Address,
+    pub proposed: Address,
+}
+
+/// Emitted when a proposed admin accepts, and the change takes effect.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminChanged {
+    #[topic]
+    pub previous: Address,
+    pub current: Address,
+}
+
+/// Emitted when a pending transfer is withdrawn by the current admin.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferCancelled {
+    #[topic]
+    pub admin: Address,
+}
+
 // --- storage helpers ------------------------------------------------------
 
 /// Sets the admin at deployment. Called only from the constructor.
@@ -107,6 +137,23 @@ pub fn set_admin(env: &Env, admin: &Address) {
 /// Returns the deployed gateway admin.
 pub fn admin(env: &Env) -> Address {
     env.storage().instance().get(&StorageKey::Admin).unwrap()
+}
+
+/// Records a proposed successor, replacing any earlier proposal.
+pub fn set_pending_admin(env: &Env, admin: &Address) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::PendingAdmin, admin);
+}
+
+/// The proposed successor, if a transfer is in flight.
+pub fn pending_admin(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&StorageKey::PendingAdmin)
+}
+
+/// Clears a pending transfer, on acceptance or cancellation.
+pub fn clear_pending_admin(env: &Env) {
+    env.storage().instance().remove(&StorageKey::PendingAdmin);
 }
 
 /// Reads a wallet, or fails with WalletNotFound.

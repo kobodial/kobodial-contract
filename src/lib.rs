@@ -49,6 +49,83 @@ impl KoboDial {
         wallet::set_admin(&env, &admin);
     }
 
+    /// Nominates a successor admin. Takes effect only once the nominee
+    /// calls `accept_admin`.
+    ///
+    /// Two steps rather than one, deliberately. The admin key authorizes
+    /// every state change in this system: registration, sends, PIN changes,
+    /// cash-outs. A single-call transfer to a mistyped or uncontrolled
+    /// address would hand all of that to nobody, permanently, with every
+    /// existing balance stranded — which is the same class of failure this
+    /// function exists to provide a way out of. Requiring the nominee to
+    /// sign proves the key is held before anything moves.
+    ///
+    /// Proposing again replaces an earlier proposal, so a mistake is
+    /// correctable right up until it is accepted.
+    pub fn propose_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), Error> {
+        if admin != wallet::admin(&env) {
+            return Err(Error::Unauthorized);
+        }
+        admin.require_auth();
+
+        wallet::set_pending_admin(&env, &new_admin);
+        wallet::AdminTransferProposed {
+            current: admin,
+            proposed: new_admin,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Accepts a nominated admin transfer, signed by the nominee.
+    ///
+    /// The incoming admin authorizes this call itself, which is the whole
+    /// point: it is the proof that the new key exists and is controlled
+    /// before the old one stops working.
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let pending = wallet::pending_admin(&env).ok_or(Error::NoPendingAdminTransfer)?;
+        if new_admin != pending {
+            return Err(Error::NotProposedAdmin);
+        }
+        new_admin.require_auth();
+
+        let previous = wallet::admin(&env);
+        wallet::set_admin(&env, &new_admin);
+        wallet::clear_pending_admin(&env);
+        wallet::AdminChanged {
+            previous,
+            current: new_admin,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Withdraws a pending transfer. Only the current admin can, and only
+    /// while the nominee has not yet accepted.
+    pub fn cancel_admin_transfer(env: Env, admin: Address) -> Result<(), Error> {
+        if admin != wallet::admin(&env) {
+            return Err(Error::Unauthorized);
+        }
+        admin.require_auth();
+
+        if wallet::pending_admin(&env).is_none() {
+            return Err(Error::NoPendingAdminTransfer);
+        }
+        wallet::clear_pending_admin(&env);
+        wallet::AdminTransferCancelled { admin }.publish(&env);
+        Ok(())
+    }
+
+    /// The current admin.
+    pub fn admin(env: Env) -> Address {
+        wallet::admin(&env)
+    }
+
+    /// The nominated successor, if a transfer is in flight.
+    pub fn pending_admin(env: Env) -> Option<Address> {
+        wallet::pending_admin(&env)
+    }
+
     /// Creates a wallet for a phone hash with an initial PIN hash.
     /// Admin-only: registration happens through the gateway after the user
     /// dials in, and the admin's signature is the gateway's attestation

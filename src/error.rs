@@ -31,4 +31,9 @@ pub enum Error {
     /// otherwise reset the PIN and take over the balance, so it is
     /// refused rather than silently ignored.
     AlreadyRegistered = 6,
+    /// Accepting an admin transfer that was never proposed, or that has
+    /// already been accepted or cancelled.
+    NoPendingAdminTransfer = 7,
+    /// The caller is not the address the outgoing admin nominated.
+    NotProposedAdmin = 8,
 }
