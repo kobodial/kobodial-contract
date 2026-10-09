@@ -6,6 +6,20 @@ A phone-number-keyed smart wallet for Stellar/Soroban, operated over USSD
 from a feature phone. Named for the **kobo**, the smallest unit of the
 Nigerian Naira.
 
+## Try it
+
+| | |
+| --- | --- |
+| **Dashboard (live)** | https://kobodial-dashboard.vercel.app |
+| **Gateway API (live)** | https://kobodial-gateway-i05s.onrender.com/health |
+| **Contract (Stellar testnet)** | [`CDQKYOYW…XX73`](https://stellar.expert/explorer/testnet/contract/CDQKYOYWBUAFZUZIAX4YDTLWYTYWPAV3AOSCUJJ2PWNRCECVV5F6XX73) |
+| **The three repositories** | [contract](https://github.com/kobodial/kobodial-contract) · [gateway](https://github.com/kobodial/kobodial-gateway) · [dashboard](https://github.com/kobodial/kobodial-dashboard) |
+
+The gateway runs on a free instance that sleeps after about fifteen minutes
+idle and takes up to a minute to wake, so the first request after a quiet
+spell is slow. The dashboard reports that as "waking up" rather than as a
+fault — reload and it answers.
+
 ## The problem
 
 A wallet normally works because its owner holds a private key and signs
